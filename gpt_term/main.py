@@ -36,19 +36,18 @@ from rich.live import Live
 from rich.markdown import Markdown
 from rich.panel import Panel
 
+from . import __version__
+from .locale import set_lang,test_lang
+import locale
+
+language, encoding = locale.getdefaultlocale()
+_ = set_lang(language)
+#_ = test_lang("zh_cn")
+
 
 from .Ai.AiClass import ChatMode
 from .Ai.OpenAi import openai
 from .Ai.Poe import poe_mode
-
-if not (__name__ == "__main__"):
-    from . import __version__
-
-
-Use_tiktoken = 0    #临时设定的变量(用于解决tiktoken库无法使用的问题)
-
-if Use_tiktoken:
-    import tiktoken
 
 
 data_dir = Path.home() / '.gpt-term'
@@ -78,6 +77,496 @@ else:
 threadlock_remote_version = threading.Lock()
 
 
+
+class ChatMode:
+    raw_mode = False
+    multi_line_mode = False
+    stream_mode = True
+
+    @classmethod
+    def toggle_raw_mode(cls):
+        cls.raw_mode = not cls.raw_mode
+        a=123
+        if cls.raw_mode:
+            console.print(_("gpt_term.raw_mode_enabled"))
+        else:
+            console.print(_("gpt_term.raw_mode_disabled"))
+
+    @classmethod
+    def toggle_stream_mode(cls):
+        cls.stream_mode = not cls.stream_mode
+        if cls.stream_mode:
+            console.print(
+                _("gpt_term.stream_mode_enabled"))
+        else:
+            console.print(
+                _("gpt_term.stream_mode_disabled"))
+
+    @classmethod
+    def toggle_multi_line_mode(cls):
+        cls.multi_line_mode = not cls.multi_line_mode
+        if cls.multi_line_mode:
+            console.print(
+                _("gpt_term.multi_line_enabled"))
+        else:
+            console.print(_("gpt_term.multi_line_disabled"))
+
+
+class ChatGPT:
+    def __init__(self, api_key: str, timeout: float):
+        self.api_key = api_key
+        self.endpoint = "https://api.openai.com/v1/chat/completions"
+        self.headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}"
+        }
+        self.messages = [
+            {"role": "system", "content": f"You are a helpful assistant.\nKnowledge cutoff: 2021-09\nCurrent date: {datetime.now().strftime('%Y-%m-%d')}"}]
+        self.model = 'gpt-3.5-turbo'
+        self.tokens_limit = 4096
+        # as default: gpt-3.5-turbo has a tokens limit as 4096
+        # when model changes, tokens will also be changed
+        self.temperature = 1
+        self.total_tokens_spent = 0
+        self.current_tokens = count_token(self.messages)
+        self.timeout = timeout
+        self.title: str = None
+        self.gen_title_messages = Queue()
+        self.auto_gen_title_background_enable = True
+        self.threadlock_total_tokens_spent = threading.Lock()
+        self.stream_overflow = 'ellipsis'
+
+        self.credit_total_granted = 0
+        self.credit_total_used = 0
+        self.credit_used_this_month = 0
+        self.credit_plan = ""
+
+    def add_total_tokens(self, tokens: int):
+        self.threadlock_total_tokens_spent.acquire()
+        self.total_tokens_spent += tokens
+        self.threadlock_total_tokens_spent.release()
+
+    def send_request(self, data):
+        try:
+            with console.status(_("gpt_term.ChatGPT_thinking")):
+                response = requests.post(
+                    self.endpoint, headers=self.headers, data=json.dumps(data), timeout=self.timeout, stream=ChatMode.stream_mode)
+            # 匹配4xx错误，显示服务器返回的具体原因
+            if response.status_code // 100 == 4:
+                error_msg = response.json()['error']['message']
+                console.print(_("gpt_term.Error_message",error_msg=error_msg))
+                log.error(error_msg)
+                return None
+
+            response.raise_for_status()
+            return response
+        except KeyboardInterrupt:
+            console.print(_("gpt_term.Aborted"))
+            raise
+        except requests.exceptions.ReadTimeout as e:
+            console.print(
+                _("gpt_term.Error_timeout",timeout=self.timeout), highlight=False)
+            return None
+        except requests.exceptions.RequestException as e:
+            console.print(_("gpt_term.Error_message",error_msg=str(e)))
+            log.exception(e)
+            return None
+
+    def send_request_silent(self, data):
+        # this is a silent sub function, for sending request without outputs (silently)
+        # it SHOULD NOT be triggered or used by not-silent functions
+        # it is only used by gen_title_silent now
+        try:
+            response = requests.post(
+                self.endpoint, headers=self.headers, data=json.dumps(data), timeout=self.timeout)
+            # match 4xx error codes
+            if response.status_code // 100 == 4:
+                error_msg = response.json()['error']['message']
+                log.error(error_msg)
+                return None
+
+            response.raise_for_status()
+            return response
+        except requests.exceptions.ReadTimeout as e:
+            log.error("Automatic generating title failed as timeout")
+            return None
+        except requests.exceptions.RequestException as e:
+            log.exception(e)
+            return None
+
+    def process_stream_response(self, response: requests.Response):
+        reply: str = ""
+        client = sseclient.SSEClient(response)
+        with Live(console=console, auto_refresh=False, vertical_overflow=self.stream_overflow) as live:
+            try:
+                rprint("[bold cyan]ChatGPT: ")
+                for event in client.events():
+                    if event.data == '[DONE]':
+                        # finish_reason = part["choices"][0]['finish_reason']
+                        break
+                    part = json.loads(event.data)
+                    if "content" in part["choices"][0]["delta"]:
+                        content = part["choices"][0]["delta"]["content"]
+                        reply += content
+                        if ChatMode.raw_mode:
+                            rprint(content, end="", flush=True),
+                        else:
+                            live.update(Markdown(reply), refresh=True)
+            except KeyboardInterrupt:
+                live.stop()
+                console.print(_('gpt_term.Aborted'))
+            finally:
+                return {'role': 'assistant', 'content': reply}
+
+    def process_response(self, response: requests.Response):
+        if ChatMode.stream_mode:
+            return self.process_stream_response(response)
+        else:
+            response_json = response.json()
+            log.debug(f"Response: {response_json}")
+            reply_message: Dict[str, str] = response_json["choices"][0]["message"]
+            print_message(reply_message)
+            return reply_message
+
+    def delete_first_conversation(self):
+        if len(self.messages) >= 3:
+            question = self.messages[1]
+            del self.messages[1]
+            if self.messages[1]['role'] == "assistant":
+                # 如果第二个信息是回答才删除
+                del self.messages[1]
+            truncated_question = question['content'].split('\n')[0]
+            if len(question['content']) > len(truncated_question):
+                truncated_question += "..."
+
+            # recount current tokens
+            new_tokens = count_token(self.messages)
+            tokens_saved = self.current_tokens - new_tokens
+            self.current_tokens = new_tokens
+
+            console.print(
+                _('gpt_term.delete_first_conversation_yes',truncated_question=truncated_question,tokens_saved=tokens_saved))
+        else:
+            console.print(_('gpt_term.delete_first_conversation_no'))
+    
+    def delete_all_conversation(self):
+        del self.messages[1:]
+        self.title = None
+        # recount current tokens
+        self.current_tokens = count_token(self.messages)
+        os.system('cls' if os.name == 'nt' else 'clear')
+        console.print(_('gpt_term.delete_all'))
+
+    def handle(self, message: str):
+        try:
+            self.messages.append({"role": "user", "content": message})
+            data = {
+                "model": self.model,
+                "messages": self.messages,
+                "stream": ChatMode.stream_mode,
+                "temperature": self.temperature
+            }
+            response = self.send_request(data)
+            if response is None:
+                self.messages.pop()
+                if self.current_tokens >= self.tokens_limit:
+                    if confirm(_('gpt_term.tokens_reached')):
+                        self.delete_first_conversation()
+                return
+
+            reply_message = self.process_response(response)
+            if reply_message is not None:
+                log.info(f"ChatGPT: {reply_message['content']}")
+                self.messages.append(reply_message)
+                self.current_tokens = count_token(self.messages)
+                self.add_total_tokens(self.current_tokens)
+
+                if len(self.messages) == 3 and self.auto_gen_title_background_enable:
+                    self.gen_title_messages.put(self.messages[1]['content'])
+
+                if self.tokens_limit - self.current_tokens in range(1, 500):
+                    console.print(
+                        _("gpt_term.tokens_approaching",token_left=self.tokens_limit - self.current_tokens))
+                # approaching tokens limit (less than 500 left), show info
+
+        except Exception as e:
+            console.print(
+                _("chat_term.Error_look_log",error_msg=str(e)))
+            log.exception(e)
+            self.save_chat_history_urgent()
+            raise EOFError
+
+        return reply_message
+
+    def gen_title(self, force: bool = False):
+        # Empty the title if there is only system message left
+        if len(self.messages) < 2:
+            self.title = None
+            return
+
+        try:
+            with console.status(_("gpt_term.title_waiting_gen")):
+                self.gen_title_messages.join()
+            if self.title and not force:
+                return self.title
+
+            # title not generated, do
+
+            content_this_time = self.messages[1]['content']
+            self.gen_title_messages.put(content_this_time)
+            with console.status(_("gpt_term.title_gening")):
+                self.gen_title_messages.join()
+        except KeyboardInterrupt:
+            console.print(_("gpt_term.title_skip_gen"))
+            raise
+
+        return self.title
+
+    def gen_title_silent(self, content: str):
+        # this is a silent sub function, only for sub thread which auto-generates title when first conversation is made and debug functions
+        # it SHOULD NOT be triggered or used by any other functions or commands
+        # because of the usage of this subfunction, no check for messages list length and title appearance is needed
+        prompt = f'Generate title shorter than 10 words for the following content in content\'s language. The tilte contains ONLY words. DO NOT include line-break. \n\nContent: """\n{content}\n"""'
+        messages = [{"role": "user", "content": prompt}]
+        data = {
+            "model": "gpt-3.5-turbo",
+            "messages": messages,
+            "temperature": 0.5
+        }
+        response = self.send_request_silent(data)
+        if response is None:
+            self.title = None
+            return
+        reply_message = response.json()["choices"][0]["message"]
+        self.title: str = reply_message['content']
+        # here: we don't need a lock here for self.title because: the only three places changes or uses chat_gpt.title will never operate together
+        # they are: gen_title, gen_title_silent (here), '/save' command
+        log.debug(f"Title background silent generated: {self.title}")
+
+        messages.append(reply_message)
+        self.add_total_tokens(count_token(messages))
+        # count title generation tokens cost
+
+        return self.title
+
+    def auto_gen_title_background(self):
+        # this is the auto title generation daemon thread main function
+        # it SHOULD NOT be triggered or used by any other functions or commands
+        while True:
+            try:
+                content_this_time = self.gen_title_messages.get()
+                log.debug(f"Title Generation Daemon Thread: Working with message \"{content_this_time}\"")
+                new_title = self.gen_title_silent(content_this_time)
+                self.gen_title_messages.task_done()
+                time.sleep(0.2)
+                if not new_title:
+                    log.error("Background Title auto-generation Failed")
+                else:
+                    change_CLI_title(self.title)
+                log.debug("Title Generation Daemon Thread: Pause")
+
+            except Exception as e:
+                console.print(_("gpt_term.title_auto_gen_fail",error_msg=str(e))
+                    )
+                log.exception(e)
+                self.save_chat_history_urgent()
+                while self.gen_title_messages.unfinished_tasks:
+                    self.gen_title_messages.task_done()
+                continue
+                # something went wrong, continue the loop
+
+    def save_chat_history(self, filename):
+        try:
+            with open(f"{filename}", 'w', encoding='utf-8') as f:
+                json.dump(self.messages, f, ensure_ascii=False, indent=4)
+            console.print(
+                _("gpt_term.save_history_success",filename=filename), highlight=False)
+        except Exception as e:
+            console.print(
+                _("gpt_term.Error_look_log"))
+            log.exception(e)
+            self.save_chat_history_urgent()
+            return
+
+    def save_chat_history_urgent(self):
+        filename = f'{data_dir}/chat_history_backup_{datetime.now().strftime("%Y-%m-%d_%H,%M,%S")}.json'
+        with open(f"{filename}", 'w', encoding='utf-8') as f:
+            json.dump(self.messages, f, ensure_ascii=False, indent=4)
+        console.print(
+            _("gpt_term.save_history_urgent_success",filename=filename), highlight=False)
+
+    def send_get(self, url, params=None):
+        try:
+            response = requests.get(
+                url, headers=self.headers, timeout=self.timeout, params=params)
+        # 匹配4xx错误，显示服务器返回的具体原因
+            if response.status_code // 100 == 4:
+                error_msg = response.json()['error']['message']
+                console.print(_("gpt_term.Error_get_url",url=url,error_msg=error_msg))
+                log.error(error_msg)
+                return None
+            response.raise_for_status()
+            return response
+        except KeyboardInterrupt:
+            console.print(_("gpt_term.Aborted"))
+            raise
+        except requests.exceptions.ReadTimeout as e:
+            console.print(
+                _("gpt_term.Error_timeot",timeout=self.timeout), highlight=False)
+            return None
+        except requests.exceptions.RequestException as e:
+            console.print(_("gpt_term.Error_message",error_msg=str(e)))
+            log.exception(e)
+            return None
+
+    def fetch_credit_total_granted(self):
+        url_subscription = "https://api.openai.com/dashboard/billing/subscription"
+        response_subscription = self.send_get(url_subscription)
+        if not response_subscription:
+            self.credit_total_granted = None
+        response_subscription_json = response_subscription.json()
+        self.credit_total_granted = response_subscription_json["hard_limit_usd"]
+        self.credit_plan = response_subscription_json["plan"]["title"]
+
+    def fetch_credit_monthly_used(self, url_usage):
+        usage_get_params_monthly = {
+            "start_date": str(date.today().replace(day=1)),
+            "end_date": str(date.today() + timedelta(days=1))}
+        response_monthly_usage = self.send_get(
+            url_usage, params=usage_get_params_monthly)
+        if not response_monthly_usage:
+            self.credit_used_this_month = None
+        self.credit_used_this_month = response_monthly_usage.json()[
+            "total_usage"] / 100
+
+    def get_credit_usage(self):
+        url_usage = "https://api.openai.com/dashboard/billing/usage"
+        try:
+            # get response from /dashborad/billing/subscription for total granted credit
+            fetch_credit_total_granted_thread = threading.Thread(
+                target=self.fetch_credit_total_granted)
+            fetch_credit_total_granted_thread.start()
+
+            # get usage this month
+            fetch_credit_monthly_used_thread = threading.Thread(
+                target=self.fetch_credit_monthly_used, args=(url_usage,))
+            fetch_credit_monthly_used_thread.start()
+
+            # start with 2023-01-01, get 99 days' data per turn
+            usage_get_start_date = date(2023, 1, 1)
+            usage_get_end_date = usage_get_start_date + timedelta(days=99)
+            # 创建线程池，设置最大线程数为5
+            with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+                # 提交任务到线程池列表
+                futures = []
+                while usage_get_start_date < date.today():
+                    usage_get_params = {
+                        "start_date": str(usage_get_start_date),
+                        "end_date": str(usage_get_end_date)}
+                    futures.append(executor.submit(
+                        self.send_get, url_usage, usage_get_params))
+                    usage_get_start_date = usage_get_end_date
+                    usage_get_end_date = usage_get_start_date + timedelta(days=99)
+
+            fetch_credit_total_granted_thread.join()
+            fetch_credit_monthly_used_thread.join()
+
+            credit_total_used_cent = 0
+            # 获取所有线程池任务的返回值
+            for future in futures:
+                result = future.result()
+                if result:
+                    credit_total_used_cent += result.json()["total_usage"]
+            # get all usage info from 2023-01-01 to now
+            self.credit_total_used = credit_total_used_cent / 100
+
+        except KeyboardInterrupt:
+            console.print(_("gpt_term.Aborted"))
+            raise
+        except Exception as e:
+            console.print(
+                _("gpt_term.Error_message",error_msg=str(e)))
+            log.exception(e)
+            self.save_chat_history_urgent()
+            raise EOFError
+        return True
+
+    def modify_system_prompt(self, new_content: str):
+        if self.messages[0]['role'] == 'system':
+            old_content = self.messages[0]['content']
+            self.messages[0]['content'] = new_content
+            console.print(
+                _("gpt_term.system_prompt_moodified",old_content=old_content,new_content=new_content))
+            self.current_tokens = count_token(self.messages)
+            # recount current tokens
+            if len(self.messages) > 1:
+                console.print(
+                    _("gpt_term.system_prompt_note"))
+        else:
+            console.print(
+                _("gpt_term.system_prompt_found"))
+
+    def set_stream_overflow(self, new_overflow: str):
+        # turn on stream if not
+        if not ChatMode.stream_mode:
+            ChatMode.toggle_stream_mode()
+
+        if new_overflow == self.stream_overflow:
+            console.print(_("gpt_term.No_change"))
+            return
+
+        old_overflow = self.stream_overflow
+        if new_overflow == 'ellipsis' or new_overflow == 'visible':
+            self.stream_overflow = new_overflow
+            console.print(
+                _("gpt_term.stream_overflow_modified",old_overflow=old_overflow,new_overflow=new_overflow))
+            if new_overflow == 'visible':
+                console.print(_("gpt_term.stream_overflow_visible"))
+        else:
+            console.print(_("gpt_term.stream_overflow_no_changed",old_overflow=old_overflow))
+        
+
+    def set_model(self, new_model: str):
+        old_model = self.model
+        if not new_model:
+            console.print(
+                _("gpt_term.model_set"),old_model=old_model)
+            return
+        self.model = str(new_model)
+        if "gpt-4-32k" in self.model:
+            self.tokens_limit = 32768
+        elif "gpt-4" in self.model:
+            self.tokens_limit = 8192
+        elif "gpt-3.5-turbo" in self.model:
+            self.tokens_limit = 4096
+        else:
+            self.tokens_limit = float('nan')
+        console.print(
+            _("gpt_term.model_changed",old_model=old_model,new_model=new_model))
+
+    def set_timeout(self, timeout):
+        try:
+            self.timeout = float(timeout)
+        except ValueError:
+            console.print(_("gpt_term.Error_input_number"))
+            return
+        console.print(_("gpt_term.timeput_changed",timeout=timeout))
+
+    def set_temperature(self, temperature):
+        try:
+            new_temperature = float(temperature)
+        except ValueError:
+            console.print(_("gpt_term.temperature_must_between"))
+            return
+        if new_temperature > 2 or new_temperature < 0:
+            console.print(_("gpt_term.temperature_must_between"))
+            return
+        self.temperature = new_temperature
+        console.print(_("gpt_term.temperature_set",temperature=temperature))
+
+
+
+
 class CommandCompleter(Completer):
     def __init__(self):
         self.nested_completer = NestedCompleter.from_nested_dict({
@@ -104,6 +593,7 @@ class CommandCompleter(Completer):
             '/undo': None,
             '/delete': {"first", "all"},
             '/reset': None,
+            '/lang' : {"zh_CN","en","jp","de"},
             '/version': None,
             '/help': None,
             '/exit': None,
@@ -136,7 +626,7 @@ class NumberValidator(Validator):
     def validate(self, document):
         text = document.text
         if not text.isdigit():
-            raise ValidationError(message="Please input an Integer!",
+            raise ValidationError(message=_("gpt_term.Error_input_int"),
                                   cursor_position=len(text))
 
 class FloatRangeValidator(Validator):
@@ -148,12 +638,12 @@ class FloatRangeValidator(Validator):
         try:
             value = float(document.text)
         except ValueError:
-            raise ValidationError(message='Input must be a number')
+            raise ValidationError(message=_('gpt_term.Error_input_number'))
 
         if self.min_value is not None and value < self.min_value:
-            raise ValidationError(message=f'Input must be at least {self.min_value}')
+            raise ValidationError(message=_("gpt_term.Error_input_least",min_value=self.min_value))
         if self.max_value is not None and value > self.max_value:
-            raise ValidationError(message=f'Input must be at most {self.max_value}')
+            raise ValidationError(message=_("gpt_term.Error_input_most",max_value=self.max_value))
         
 temperature_validator = FloatRangeValidator(min_value=0.0, max_value=2.0)
 
@@ -175,7 +665,7 @@ def copy_code(message: Dict[str, str], select_code_idx: int = None):
     '''Copy the code in ChatGPT's last reply to Clipboard'''
     code_list = re.findall(r'```[\s\S]*?```', message["content"])
     if len(code_list) == 0:
-        console.print("[dim]No code found")
+        console.print(_("gpt_term.code_not_found"))
         return
 
     if len(code_list) == 1 and select_code_idx is None:
@@ -184,28 +674,28 @@ def copy_code(message: Dict[str, str], select_code_idx: int = None):
     else:
         if select_code_idx is None:
             console.print(
-                "[dim]There are more than one code in ChatGPT's last reply")
+                _("gpt_term.code_too_many_found"))
             code_num = 0
             for codes in code_list:
                 code_num += 1
-                console.print(f"[yellow]Code {code_num}:")
+                console.print(_("gpt_term.code_num",code_num=code_num))
                 console.print(Markdown(codes))
 
             select_code_idx = prompt(
-                "Please select which code to copy: ", style=style, validator=NumberValidator())
+                _("gpt_term.code_select"), style=style, validator=NumberValidator())
             # get the number of the selected code
         try:
             selected_code = code_list[int(select_code_idx)-1]
         except ValueError:
-            console.print("[red]Code index must be an Integer")
+            console.print(_("gpt_term.code_index_must_int"))
             return
         except IndexError:
             if len(code_list) == 1:
                 console.print(
-                    "[red]Index out of range: There is only one code in ChatGPT's last reply")
+                    _("gpt_term.code_index_out_range_one"))
             else:
                 console.print(
-                    f"[red]Index out of range: You should input an Integer in range 1 ~ {len(code_list)}")
+                    _("gpt_term.code_index_out_range_many",len(code_list)))
                 # show idx range
                 # use len(code_list) instead of code_num as the max of idx
                 # in order to avoid error 'UnboundLocalError: local variable 'code_num' referenced before assignment' when inputing select_code_idx directly
@@ -215,7 +705,7 @@ def copy_code(message: Dict[str, str], select_code_idx: int = None):
     epos = selected_code.rfind('```')  # code end pos.
     pyperclip.copy(''.join(selected_code[bpos+1:epos-1]))
     # erase code begin and end sign
-    console.print("[dim]Code copied to Clipboard")
+    console.print(_("gpt_term.code_copy"))
 
 
 def change_CLI_title(new_title: str):
@@ -248,6 +738,7 @@ def get_levenshtein_distance(s1: str, s2: str):
 
 def handle_command(command: str, chat_gpt: openai or poe_mode, key_bindings: KeyBindings, chat_save_perfix: str):
     '''处理斜杠(/)命令'''
+    global _
     if command == '/raw':
         ChatMode.toggle_raw_mode()
     elif command == '/multi':
@@ -262,19 +753,18 @@ def handle_command(command: str, chat_gpt: openai or poe_mode, key_bindings: Key
 
     elif command == '/tokens':
         chat_gpt.threadlock_total_tokens_spent.acquire()
-        console.print(Panel(f"[bold bright_magenta]Total Tokens Spent:[/]\t{chat_gpt.total_tokens_spent}\n"
-                            f"[bold green]Current Tokens:[/]\t\t{chat_gpt.current_tokens}/[bold]{chat_gpt.tokens_limit}",
-                            title='token_summary', title_align='left', width=40))
+        console.print(Panel(_("gpt_term.tokens_used",total_tokens_spent=chat_gpt.total_tokens_spent,current_tokens=chat_gpt.current_tokens,tokens_limit=chat_gpt.tokens_limit),
+                            title=_("gpt_term.tokens_title"), title_align='left', width=40))
         chat_gpt.threadlock_total_tokens_spent.release()
 
     elif command == '/usage':
-        with console.status("[cyan]Getting credit usage..."):
+        with console.status(_("gpt_term.usage_getting")):
             if not chat_gpt.get_credit_usage():
                 return
-        console.print(Panel(f"[bold green]Total Granted:[/]\t\t${format(chat_gpt.credit_total_granted, '.2f')}\n"
-                            f"[bold cyan]Used This Month:[/]\t${format(chat_gpt.credit_used_this_month, '.2f')}\n"
-                            f"[bold blue]Used Total:[/]\t\t${format(chat_gpt.credit_total_used, '.2f')}",
-                            title="Credit Summary", title_align='left', subtitle=f"[bright_blue]Plan: {chat_gpt.credit_plan}", width=35))
+        console.print(Panel(_("gpt_term.usage_granted",credit_total_granted=format(chat_gpt.credit_total_granted,".2f"))+"\n"+
+                            _("gpt_term.usage_used_month",credit_used_this_month=format(chat_gpt.credit_used_this_month,'.2f'))+"\n"+
+                            _("gpt_term.usage_total",credit_total_used=format(chat_gpt.credit_total_used,'.2f')),
+                            title=_("gpt_term.usage_title"), title_align='left', subtitle=_("gpt_term.usage_plan",credit_plan=chat_gpt.credit_plan), width=35))
 
     elif command.startswith('/model'):
         args = command.split()
@@ -282,11 +772,11 @@ def handle_command(command: str, chat_gpt: openai or poe_mode, key_bindings: Key
             new_model = args[1]
         else:
             new_model = prompt(
-                "OpenAI API model: ", default=chat_gpt.model, style=style)
+                "可以使用的模型:\nOpenAI API model: ", default=chat_gpt.model, style=style)
         if new_model != chat_gpt.model:
             chat_gpt.set_model(new_model)
         else:
-            console.print("[dim]No change.")
+            console.print(_("gpt_term.No_change"))
 
     elif command == '/last':
         reply = chat_gpt.messages[-1]
@@ -298,7 +788,7 @@ def handle_command(command: str, chat_gpt: openai or poe_mode, key_bindings: Key
         if len(args) > 1:
             if args[1] == 'all':
                 pyperclip.copy(reply["content"])
-                console.print("[dim]Last reply copied to Clipboard")
+                console.print(_("gpt_term.code_last_copy"))
             elif args[1] == 'code':
                 if len(args) > 2:
                     copy_code(reply, args[2])
@@ -306,10 +796,10 @@ def handle_command(command: str, chat_gpt: openai or poe_mode, key_bindings: Key
                     copy_code(reply)
             else:
                 console.print(
-                    "[dim]Nothing to do. Available copy command: `[bright_magenta]/copy code \[index][/]` or `[bright_magenta]/copy all[/]`")
+                    _("gpt_term.code_copy_fail"))
         else:
             pyperclip.copy(reply["content"])
-            console.print("[dim]Last reply copied to Clipboard")
+            console.print(_("gpt_term.code_last_copy"))
 
     elif command.startswith('/save'):
         args = command.split()
@@ -333,11 +823,11 @@ def handle_command(command: str, chat_gpt: openai or poe_mode, key_bindings: Key
             new_content = ' '.join(args[1:])
         else:
             new_content = prompt(
-                "System prompt: ", default=chat_gpt.messages[0]['content'], style=style, key_bindings=key_bindings)
+                _("gpt_term.system_prompt"), default=chat_gpt.messages[0]['content'], style=style, key_bindings=key_bindings)
         if new_content != chat_gpt.messages[0]['content']:
             chat_gpt.modify_system_prompt(new_content)
         else:
-            console.print("[dim]No change.")
+            console.print(_("gpt_term.No_change"))
 
     elif command.startswith('/rand') or command.startswith('/temperature'):
         args = command.split()
@@ -345,11 +835,11 @@ def handle_command(command: str, chat_gpt: openai or poe_mode, key_bindings: Key
             new_temperature = args[1]
         else:
             new_temperature = prompt(
-                "New Randomness: ", default=str(chat_gpt.temperature), style=style, validator=temperature_validator)
+                _("gpt_term.new_temperature"), default=str(chat_gpt.temperature), style=style, validator=temperature_validator)
         if new_temperature != str(chat_gpt.temperature):
             chat_gpt.set_temperature(new_temperature)
         else:
-            console.print("[dim]No change.")            
+            console.print(_("gpt_term.No_change"))            
 
     elif command.startswith('/title'):
         args = command.split()
@@ -360,9 +850,9 @@ def handle_command(command: str, chat_gpt: openai or poe_mode, key_bindings: Key
             # generate a new title
             new_title = chat_gpt.gen_title(force=True)
             if not new_title:
-                console.print("[red]Failed to generate title.")
+                console.print(_("gpt_term.title_gen_fail"))
                 return
-        console.print(f"[dim]CLI Title changed to '{chat_gpt.title}'")
+        console.print(_('gpt_term.title_changed',title=chat_gpt.title))
 
     elif command.startswith('/timeout'):
         args = command.split()
@@ -370,11 +860,11 @@ def handle_command(command: str, chat_gpt: openai or poe_mode, key_bindings: Key
             new_timeout = args[1]
         else:
             new_timeout = prompt(
-                "OpenAI API timeout: ", default=str(chat_gpt.timeout), style=style)
+                _("gpt_term.timeout_prompt"), default=str(chat_gpt.timeout), style=style)
         if new_timeout != str(chat_gpt.timeout):
             chat_gpt.set_timeout(new_timeout)
         else:
-            console.print("[dim]No change.")
+            console.print(_("gpt_term.No_change"))
 
     elif command == '/undo':
         if len(chat_gpt.messages) > 2:
@@ -385,10 +875,11 @@ def handle_command(command: str, chat_gpt: openai or poe_mode, key_bindings: Key
             if len(question['content']) > len(truncated_question):
                 truncated_question += "..."
             console.print(
-                f"[dim]Last question: '{truncated_question}' and it's answer has been removed.")
-            chat_gpt.current_tokens = chat_gpt.count_token(chat_gpt.messages)
+                _("gpt_term.undo_removed",truncated_question=truncated_question))
+            chat_gpt.current_tokens = count_token(chat_gpt.messages)
+
         else:
-            console.print("[dim]Nothing to undo.")
+            console.print(_("gpt_term.undo_nothing"))
 
     elif command.startswith('/reset'):
         chat_gpt.delete_all_conversation()
@@ -402,42 +893,33 @@ def handle_command(command: str, chat_gpt: openai or poe_mode, key_bindings: Key
                 chat_gpt.delete_all_conversation()
             else:
                 console.print(
-                    "[dim]Nothing to do. Avaliable delete command: `[bright_magenta]/delete first[/]` or `[bright_magenta]/delete all[/]`")
+                    _("gpt_term.delete_nothing"))
         else:
             chat_gpt.delete_first_conversation()
 
     elif command == '/version':
         threadlock_remote_version.acquire()
-        console.print(Panel(f"[bold blue]Local Version:[/]\tv{str(local_version)}\n"
-                            f"[bold green]Remote Version:[/]\tv{str(remote_version)}",
-                            title='Version', title_align='left', width=28))
+        string=_("gpt_term.version_all",local_version=str(local_version),remote_version=str(remote_version))
+        console.print(Panel(string,
+                            title=_("gpt_term.version_name"), title_align='left', width=28))
         threadlock_remote_version.release()
+    
+    elif command.startswith('/lang'):
+        args = command.split()
+        if len(args) == 1:
+            console.print(_("gpt_term.lang_no_arg"))
+        elif args[1]:
+            #   把最后2位修改为大写,例:"zh_cn" -> "zh_CN".主要是因为不知道为什么split后,原本的大写转为小写了,这个算是个临时解决方案
+            if len(args[1]) > 2:
+                args[1] = args[1][:-2] + args[1][-2:].upper()
+            _=set_lang(args[1])
+            console.print(_("gpt_term.lang_switch"))
 
     elif command == '/exit':
         raise EOFError
 
     elif command == '/help':
-        console.print('''[bold]Available commands:[/]
-    /raw                     - Toggle raw mode (showing raw text of ChatGPT's reply)
-    /multi                   - Toggle multi-line mode (allow multi-line input)
-    /stream \[overflow_mode]  - Toggle stream output mode (flow print the answer)
-    /tokens                  - Show the total tokens spent and the tokens for the current conversation
-    /usage                   - Show total credits and current credits used
-    /last                    - Display last ChatGPT's reply
-    /copy (all)              - Copy the full ChatGPT's last reply (raw) to Clipboard
-    /copy code \[index]       - Copy the code in ChatGPT's last reply to Clipboard
-    /save \[filename_or_path] - Save the chat history to a file, suggest title if filename_or_path not provided
-    /model \[model_name]      - Change AI model
-    /system \[new_prompt]     - Modify the system prompt
-    /rand \[randomness]       - Set Model sampling temperature (0~2)
-    /title \[new_title]       - Set title for this chat, if new_title is not provided, a new title will be generated
-    /timeout \[new_timeout]   - Modify the api timeout
-    /undo                    - Undo the last question and remove its answer
-    /delete (first)          - Delete the first conversation in current chat
-    /delete all              - Clear all messages and conversations current chat
-    /version                 - Show gpt-term local and remote version
-    /help                    - Show this help message
-    /exit                    - Exit the application''')
+        console.print(_("gpt_term.help_text"))
         
     else:
         set_command = set(command)
@@ -451,12 +933,12 @@ def handle_command(command: str, chat_gpt: openai or poe_mode, key_bindings: Key
                     most_similar_command = slash_command
                     min_levenshtein_distance = this_levenshtein_distance
         
-        console.print(f"Unrecognized Slash Command `[bold red]{command}[/]`", end=" ")
+        console.print(_("gpt_term.help_uncommand",command=command), end=" ")
         if most_similar_command:
-            console.print(f"Do you mean `[bright magenta]{most_similar_command}[/]`?")
+            console.print(_("gpt_term.help_mean_help",most_similar_command=most_similar_command))
         else:
             console.print("")
-        console.print("Use `[bright magenta]/help[/]` to see all available slash commands")
+        console.print(_("gpt_term.help_use_help"))
 
 
 def load_chat_history(file_path):
@@ -466,9 +948,9 @@ def load_chat_history(file_path):
             chat_history = json.load(f)
         return chat_history
     except FileNotFoundError:
-        console.print(f"[bright_red]File not found: {file_path}")
+        console.print(_("gpt_term.load_file_not",file_path=file_path))
     except json.JSONDecodeError:
-        console.print(f"[bright_red]Invalid JSON format in file: {file_path}")
+        console.print(_("gpt_term.load_json_error",file_path=file_path))
     return None
 
 
@@ -518,60 +1000,89 @@ def write_config(config_ini: ConfigParser):
 
 
 def set_config_by_args(args: argparse.Namespace, config_ini: ConfigParser):
+    global _
     config_need_to_set = {}
     if args.set_apikey:     config_need_to_set.update({"OPENAI_API_KEY"      : args.set_apikey})
     if args.set_timeout:    config_need_to_set.update({"OPENAI_API_TIMEOUT"  : args.set_timeout})
     if args.set_saveperfix: config_need_to_set.update({"CHAT_SAVE_PERFIX"    : args.set_saveperfix})
     if args.set_loglevel:   config_need_to_set.update({"LOG_LEVEL"           : args.set_loglevel})
     if args.set_gentitle:   config_need_to_set.update({"AUTO_GENERATE_TITLE" : args.set_gentitle})
+    # 新的语言设置:
+    if args.set_lang:       config_need_to_set.update({"LANGUAGE"            : args.set_lang})
 
     if len(config_need_to_set) == 0:
         return
     # nothing to set
-
     for key, val in config_need_to_set.items():
         config_ini['DEFAULT'][key] = str(val)
-        console.print(f"Config item `[bright_magenta]{key}[/]` is set to [green]{val}[/]")
+        console.print(_("gpt_term.config_key_to_shell_key",key_word=str(key),val=str(val)))
 
     write_config(config_ini)
     exit(0)
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Use ChatGPT in terminal')
-    parser.add_argument('--version', action='version', version=f'%(prog)s v{local_version}')
-    parser.add_argument('--load', metavar='FILE', type=str, help='Load chat history from file')
-    parser.add_argument('--key', type=str, help='Choose the API key to load')
-    parser.add_argument('--model', type=str, help='Choose the AI model to use')
-    parser.add_argument('-m', '--multi', action='store_true', help='Enable multi-line mode')
-    parser.add_argument('-r', '--raw', action='store_true', help='Enable raw mode')
-    # normal function args
-
-    parser.add_argument('--set-apikey', metavar='KEY', type=str, help='Set API key for OpenAI')
-    parser.add_argument('--set-timeout', metavar='SEC', type=int, help='Set maximum waiting time for API requests')
-    parser.add_argument('--set-gentitle', metavar='BOOL', type=str, help='Set whether to automatically generate a title for chat')
-    parser.add_argument('--set-saveperfix', metavar='PERFIX', type=str, help='Set chat history file\'s save perfix')
-    parser.add_argument('--set-loglevel', metavar='LEVEL', type=str, help='Set log level: DEBUG, INFO, WARNING, ERROR, CRITICAL')
-    # setting args
-    args = parser.parse_args()
+    global _
 
     # 读取配置文件
     config_ini = ConfigParser()
     config_ini.read(f'{data_dir}/config.ini', encoding='utf-8')
     config = config_ini['DEFAULT']
 
+    # 读取语言配置
+    if config.get("language"):
+        if config.get("language") == "zh_CN":
+            _=set_lang("zh_CN")
+        elif config.get("language") == "en":
+            _=set_lang("en")
+        elif config.get("language") == "jp":
+            _=set_lang("jp")
+        elif config.get("language") == "de":
+            _=set_lang("de")
+
+    parser = argparse.ArgumentParser(description=_("gpt_term.help_description"),add_help=False)
+    parser.add_argument('-h', '--help',action='help', help=_("gpt_term.help_help"))
+    parser.add_argument('-v','--version', action='version', version=_("gpt_term.v",local_version=local_version),help=_("gpt_term.help_v"))
+    parser.add_argument('--load', metavar='FILE', type=str, help=_("gpt_term.help_load"))
+    parser.add_argument('--key', type=str, help=_("gpt_term.help_key"))
+    parser.add_argument('--model', type=str, help=_("gpt_term.help_model"))
+    parser.add_argument('-m', '--multi', action='store_true', help=_("gpt_term.help_m"))
+    parser.add_argument('-r', '--raw', action='store_true', help=_("gpt_term.help_r"))
+    ## 新添加的选项：--lang
+    parser.add_argument('-l','--lang', type=str, choices=['en', 'zh_CN', 'jp', 'de'], help=_("gpt_term.help_lang"))
+    # normal function args
+
+    parser.add_argument('--set-apikey', metavar='KEY', type=str, help=_("gpt_term.help_set_key"))
+    parser.add_argument('--set-timeout', metavar='SEC', type=int, help=_("gpt_term.help_set_timeout"))
+    parser.add_argument('--set-gentitle', metavar='BOOL', type=str, help=_("gpt_term.help_set_gentitle"))
+    ## 新添加的选项：--set-lang
+    parser.add_argument('--set-lang', type=str, choices=['en', 'zh_CN', 'jp', 'de'], help=_("gpt_term.help_set_lang"))
+    parser.add_argument('--set-saveperfix', metavar='PERFIX', type=str, help=_("gpt_term.help_set_saveperfix"))
+    parser.add_argument('--set-loglevel', metavar='LEVEL', type=str, help=_("gpt_term.help_set_loglevel")+'DEBUG, INFO, WARNING, ERROR, CRITICAL')
+    # setting args
+    args = parser.parse_args()
+
+    
+    if args.set_lang:
+        if args.set_lang == "zh_CN":
+            _=set_lang("zh_CN")
+        elif args.set_lang == "en":
+            _=set_lang("en")
+        elif args.set_lang == "jp":
+            _=set_lang("jp")
+        elif args.set_lang == "de":
+            _=set_lang("de")
     set_config_by_args(args, config_ini)
 
     try:
         log_level = getattr(logging, config.get("LOG_LEVEL", "INFO").upper())
     except AttributeError as e:
         console.print(
-            f"[dim]Invalid log level: {e}, check config.ini file. Set log level to INFO.")
+            _("gpt_term.log_level_error"))
         log_level = logging.INFO
     log.setLevel(log_level)
     # log level set must be before debug logs, because default log level is INFO, and before new log level being set debug logs will not be written to log file
     log.info("GPT-Term start")
-
     log.debug(f"Local version: {str(local_version)}")
     # get local version from pkg resource
 
@@ -590,8 +1101,8 @@ def main():
 
     if not api_key:
         log.debug("API Key not found, waiting for input")
-        api_key = prompt("OpenAI API Key not found, please input: ")
-        if confirm('Save API Key to config file?'):
+        api_key = prompt(_("gpt_term.input_api_key"))
+        if confirm(_("gpt_term.save_api_key")):
             config["OPENAI_API_KEY"] = api_key
             write_config(config_ini)
 
@@ -617,9 +1128,8 @@ def main():
     gen_title_daemon_thread.start()
     log.debug("Title generation daemon thread started")
 
-    console.print(
-        "[dim]Hi, welcome to chat with GPT. Type `[bright_magenta]/help[/]` to display available commands.")
-
+    if not args.lang:
+        args.lang = config.get("LANGUAGE")
     if args.model:
         chat_gpt.set_model(args.model)
 
@@ -639,7 +1149,19 @@ def main():
             chat_gpt.current_tokens = chat_gpt.count_token(chat_gpt.messages)
             log.info(f"Chat history successfully loaded from: {args.load}")
             console.print(
-                f"[dim]Chat history successfully loaded from: [bright_magenta]{args.load}", highlight=False)
+                _("gpt_term.load_chat_history",load=args.load), highlight=False)
+    if args.lang:
+        if args.lang == "zh_CN":
+            _=set_lang("zh_CN")
+        elif args.lang == "en":
+            _=set_lang("en")
+        elif args.lang == "jp":
+            _=set_lang("jp")
+        elif args.lang == "de":
+            _=set_lang("de")
+
+    console.print(
+        _("gpt_term.welcome"))
 
     session = PromptSession()
 
@@ -669,19 +1191,19 @@ def main():
         except KeyboardInterrupt:
             continue
         except EOFError:
-            console.print("Exiting...")
+            console.print(_("gpt_term.exit"))
             break
 
     log.info(f"Total tokens spent: {chat_gpt.total_tokens_spent}")
     console.print(
-        f"[bright_magenta]Total tokens spent: [bold]{chat_gpt.total_tokens_spent}")
+        _("gpt_term.spent_token",total_tokens_spent=chat_gpt.total_tokens_spent))
     
     threadlock_remote_version.acquire()
     if remote_version and remote_version > local_version:
         console.print(Panel(Group(
-            Markdown("Use `pip install --upgrade gpt-term` to upgrade."),
-            Markdown("Visit our [GitHub Site](https://github.com/xiaoxx970/chatgpt-in-terminal) to see what have been changed!")),
-            title=f"New Version Available: [red]v{str(local_version)}[/] -> [green]v{str(remote_version)}[/]",
+            Markdown(_("gpt_term.upgrade_use_command")),
+            Markdown(_("gpt_term.upgrade_see_git"))),
+            title=_("gpt_term.upgrade_title",local_version=str(local_version),remote_version=str(remote_version)),
             width=58, style="blue", title_align="left"))
     threadlock_remote_version.release()
 
