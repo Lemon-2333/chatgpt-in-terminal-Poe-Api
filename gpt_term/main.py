@@ -64,16 +64,13 @@ logging.basicConfig(filename=f'{data_dir}/chat.log', format='%(asctime)s %(name)
 log = logging.getLogger("chat")
 
 console = Console()
-ChatMode.init(console=console)
+ChatMode.init(console=console,_=_)
 style = Style.from_dict({
     "prompt": "ansigreen",  # 将提示符设置为绿色
 })
 
 remote_version = None
-if not (__name__ == "__main__"):
-    local_version = parse_version(__version__)
-else:
-    local_version = "test"
+local_version = parse_version(__version__)
 threadlock_remote_version = threading.Lock()
 
 
@@ -128,7 +125,7 @@ class ChatGPT:
         # when model changes, tokens will also be changed
         self.temperature = 1
         self.total_tokens_spent = 0
-        self.current_tokens = count_token(self.messages)
+        self.current_tokens = self.count_token(self.messages)
         self.timeout = timeout
         self.title: str = None
         self.gen_title_messages = Queue()
@@ -344,7 +341,7 @@ class ChatGPT:
         log.debug(f"Title background silent generated: {self.title}")
 
         messages.append(reply_message)
-        self.add_total_tokens(count_token(messages))
+        self.add_total_tokens(self.count_token(messages))
         # count title generation tokens cost
 
         return self.title
@@ -497,7 +494,7 @@ class ChatGPT:
             self.messages[0]['content'] = new_content
             console.print(
                 _("gpt_term.system_prompt_moodified",old_content=old_content,new_content=new_content))
-            self.current_tokens = count_token(self.messages)
+            self.current_tokens = self.count_token(self.messages)
             # recount current tokens
             if len(self.messages) > 1:
                 console.print(
@@ -876,7 +873,7 @@ def handle_command(command: str, chat_gpt: openai or poe_mode, key_bindings: Key
                 truncated_question += "..."
             console.print(
                 _("gpt_term.undo_removed",truncated_question=truncated_question))
-            chat_gpt.current_tokens = count_token(chat_gpt.messages)
+            chat_gpt.current_tokens = chat_gpt.count_token(chat_gpt.messages)
 
         else:
             console.print(_("gpt_term.undo_nothing"))
@@ -912,6 +909,8 @@ def handle_command(command: str, chat_gpt: openai or poe_mode, key_bindings: Key
             #   把最后2位修改为大写,例:"zh_cn" -> "zh_CN".主要是因为不知道为什么split后,原本的大写转为小写了,这个算是个临时解决方案
             if len(args[1]) > 2:
                 args[1] = args[1][:-2] + args[1][-2:].upper()
+            print(args[1])
+            breakpoint()
             _=set_lang(args[1])
             console.print(_("gpt_term.lang_switch"))
 
@@ -1116,8 +1115,8 @@ def main():
 
     openai_api_key="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"
     poe_api_key="tKSUqU_FYfgznLgFkudAmw%3D%3D"
-    chat_gpt = poe_mode(api_key=poe_api_key,console=console,timeout=api_timeout,log=log,data_dir=data_dir,Use_tiktoken=1)
-    #chat_gpt = openai(api_key=openai_api_key,console=console,timeout=api_timeout,log=log,data_dir=data_dir,Use_tiktoken=1)
+    #chat_gpt = poe_mode(api_key=poe_api_key,console=console,timeout=api_timeout,log=log,data_dir=data_dir,_=_,Use_tiktoken=1)
+    chat_gpt = openai(api_key=openai_api_key,console=console,timeout=api_timeout,log=log,data_dir=data_dir,_=_,Use_tiktoken=1)
 
     if not config.getboolean("AUTO_GENERATE_TITLE", True):
         chat_gpt.auto_gen_title_background_enable = False

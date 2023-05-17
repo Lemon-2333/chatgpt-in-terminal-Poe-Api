@@ -13,8 +13,8 @@ import time
 
 
 class poe_mode(Ai):
-    def __init__(self, api_key, console, log, data_dir, timeout, Use_tiktoken=1) -> None:
-        super().__init__(api_key, console, log, data_dir, Use_tiktoken)
+    def __init__(self, api_key, console, log, data_dir, timeout,_, Use_tiktoken=1) -> None:
+        super().__init__(api_key, console, log, data_dir,_, Use_tiktoken)
         import poe
 
         self.client = poe.Client(api_key)

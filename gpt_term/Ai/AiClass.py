@@ -20,7 +20,7 @@ import platform
 import sys
 
 class Ai():
-    def __init__(self,api_key,console,log,data_dir,Use_tiktoken = 1,) -> None:
+    def __init__(self,api_key,console,log,data_dir,_,Use_tiktoken = 1) -> None:
         self.api_key = api_key
         self.console = console
         self.Use_tiktoken = Use_tiktoken
@@ -496,33 +496,38 @@ class Ai():
 
 class ChatMode():
     console = ''
+    _=''
     raw_mode = False
     multi_line_mode = False
     stream_mode = True
     @classmethod
-    def init(cls,console):
+    def init(cls,console,_):
         cls.console=console
+        cls._=_
     @classmethod
     def toggle_raw_mode(cls):
         cls.raw_mode = not cls.raw_mode
-        cls.console.print(
-            f"[dim]Raw mode {'[green]enabled[/]' if cls.raw_mode else '[bright_red]disabled[/]'}, use `[bright_magenta]/last[/]` to display the last answer.")
+        a=123
+        if cls.raw_mode:
+            cls.console.print(cls._("gpt_term.raw_mode_enabled"))
+        else:
+            cls.console.print(cls._("gpt_term.raw_mode_disabled"))
 
     @classmethod
     def toggle_stream_mode(cls):
         cls.stream_mode = not cls.stream_mode
         if cls.stream_mode:
             cls.console.print(
-                f"[dim]Stream mode [green]enabled[/], the answer will start outputting as soon as the first response arrives.")
+                cls._("gpt_term.stream_mode_enabled"))
         else:
             cls.console.print(
-                f"[dim]Stream mode [bright_red]disabled[/], the answer is being displayed after the server finishes responding.")
+                cls._("gpt_term.stream_mode_disabled"))
 
     @classmethod
     def toggle_multi_line_mode(cls):
         cls.multi_line_mode = not cls.multi_line_mode
         if cls.multi_line_mode:
             cls.console.print(
-                f"[dim]Multi-line mode [green]enabled[/], press [[bright_magenta]Esc[/]] + [[bright_magenta]ENTER[/]] to submit.")
+                cls._("gpt_term.multi_line_enabled"))
         else:
-            cls.console.print(f"[dim]Multi-line mode [bright_red]disabled[/].")
+            cls.console.print(cls._("gpt_term.multi_line_disabled"))

@@ -19,8 +19,8 @@ import platform
 import sys
 
 class openai(Ai):
-    def __init__(self, api_key: str,console:Console, timeout: float,log,data_dir,Use_tiktoken = 1):
-        super().__init__(api_key=api_key,console=console,log=log,data_dir=data_dir,Use_tiktoken=Use_tiktoken)
+    def __init__(self, api_key: str,console:Console, timeout: float,log,data_dir,_,Use_tiktoken = 1):
+        super().__init__(api_key=api_key,console=console,log=log,data_dir=data_dir,_=_,Use_tiktoken=Use_tiktoken)
         self.key_mode = "openai"   #   而且有且只有poe 与 openai 两个模式
         self.endpoint = "https://api.openai.com/v1/chat/completions"
         self.headers = {
