@@ -41,6 +41,8 @@ en:
   usage_title: "Credit Summary"
   usage_plan: "[bright_blue]Plan: %{credit_plan}"
   #
+  host_set: "[dim]API Host set to '%{new_host}'."
+  #
   model_set: "[dim]Empty input, the model remains '%{old_model}'."
   model_changed: "[dim]Model has been set from '%{old_model}' to '%{new_model}'."
   #
@@ -64,7 +66,7 @@ en:
   system_prompt_note: "[dim]Note this is not a new chat, modifications to the system prompt have limited impact on answers."
   system_prompt_found: "[dim]No system prompt found in messages."
   #
-  title_waiting_gen: "[bold cyan]Waiting last generationg to finish..."
+  title_waiting_gen: "[bold cyan]Waiting last generation to finish..."
   title_gening: "[bold cyan]Generating title... [/](Ctrl-C to skip)"
   title_skip_gen: "[bold cyan]Skip wait."
   title_gen_fail: "[red]Failed to generate title."
@@ -97,54 +99,56 @@ en:
   load_file_not: "[bright_red]File not found: %{file_path}"
   load_json_error: "[bright_red]Invalid JSON format in file: %{file_path}"
   #
-  lang_no_arg: "[dim]Please enter the language you want to switch to, for example: `[bright_magenta]/lange en[/]`."
-  lang_switch: "[dim]Already switched to [bright_magenta]English[/]."
+  new_lang_prompt: "Language: "
+  lang_switch: "[dim]Language switched to [bright_magenta]English[/]."
+  lang_config_unsupport: "[red]Unsupported language `%{config_lang}` in config, use user local language."
+  lang_unsupport: "[red]Unsupported language `%{new_lang}`."
   #
   upgrade_title: "New Version Available: [red]v%{local_version}[/] -> [green]v%{remote_version}[/]"
   upgrade_use_command: "Use `pip install --upgrade gpt-term` to upgrade."
   upgrade_see_git: "Visit our [GitHub Site](https://github.com/xiaoxx970/chatgpt-in-terminal) to see what have been changed!"
   #
-  help_description: 'Use ChatGPT in terminal'
-  help_help: "show this help message and exit" 
-  v: '%(prog)s v%{local_version}'
+  help_description: "Use ChatGPT in terminal"
+  help_help: "show this help message and exit"
   help_v: "show program's version number and exit"
-  help_load: 'Load chat history from file'
-  help_key: "Choose the API key to load"
-  help_model: 'Choose the AI model to use'
-  help_m: 'Enable multi-line mode'
-  help_r: 'Enable raw mode'
+  help_load: "Load chat history from file"
+  help_key: "Choose the name of API key in config file to load"
+  help_model: "Choose the AI model to use"
+  help_host: "Set the API Host to use in this run (usually used to configure proxy)"
+  help_m: "Enable multi-line mode"
+  help_r: "Enable raw mode"
   help_lang: "Choose language"
-  help_set_key: 'Set API key for OpenAI'
-  help_set_timeout: 'Set maximum waiting time for API requests'
-  help_set_gentitle: 'Set whether to automatically generate a title for chat'
-  help_set_lang: 'Set language'
+  help_set_host: "Set the API Host to use (usually used to configure proxy)"
+  help_set_key: "Set API key for OpenAI"
+  help_set_timeout: "Set maximum waiting time for API requests"
+  help_set_gentitle: "Set whether to automatically generate a title for chat"
+  help_set_lang: "Set language"
   help_set_saveperfix: "Set chat history file's save perfix"
   help_set_loglevel: "Set log level:"
   #
   help_use_help: "Use `[bright magenta]/help[/]` to see all available slash commands"
   help_uncommand: "Unrecognized Slash Command `[bold red]%{command}[/]`"
   help_mean_command: "Do you mean `[bright magenta]%{most_similar_command}[/]`?"
-  help_text: "[bold]Available commands:[/]\n/raw                     - Toggle raw mode (showing raw text of ChatGPT's reply)\n/multi                   - Toggle multi-line mode (allow multi-line input)\n/stream \\[overflow_mode]  - Toggle stream output mode (flow print the answer)\n/tokens                  - Show the total tokens spent and the tokens for the current conversation\n/usage                   - Show total credits and current credits used\n/last                    - Display last ChatGPT's reply\n/copy (all)              - Copy the full ChatGPT's last reply (raw) to Clipboard\n/copy code \\[index]       - Copy the code in ChatGPT's last reply to Clipboard\n/save \\[filename_or_path] - Save the chat history to a file, suggest title if filename_or_path not provided\n/model \\[model_name]      - Change AI model\n/system \\[new_prompt]     - Modify the system prompt\n/rand \\[randomness]       - Set Model sampling temperature (0~2)\n/title \\[new_title]       - Set title for this chat, if new_title is not provided, a new title will be generated\n/timeout \\[new_timeout]   - Modify the api timeout\n/undo                    - Undo the last question and remove its answer\n/delete (first)          - Delete the first conversation in current chat\n/delete all              - Clear all messages and conversations current chat\n/version                 - Show gpt-term local and remote version\n/lang                    - Switch language\n/help                    - Show this help message\n/exit                    - Exit the application"
-
-#help_text: "[bold]Available commands:[/]
-#    /raw                     - Toggle raw mode (showing raw text of ChatGPT's reply)
-#    /multi                   - Toggle multi-line mode (allow multi-line input)
-#    /stream \\[overflow_mode]  - Toggle stream output mode (flow print the answer)
-#    /tokens                  - Show the total tokens spent and the tokens for the current conversation
-#    /usage                   - Show total credits and current credits used
-#    /last                    - Display last ChatGPT's reply
-#    /copy (all)              - Copy the full ChatGPT's last reply (raw) to Clipboard
-#    /copy code \\[index]       - Copy the code in ChatGPT's last reply to Clipboard
-#    /save \\[filename_or_path] - Save the chat history to a file, suggest title if filename_or_path not provided
-#    /model \\[model_name]      - Change AI model
-#    /system \\[new_prompt]     - Modify the system prompt
-#    /rand \\[randomness]       - Set Model sampling temperature (0~2)
-#    /title \\[new_title]       - Set title for this chat, if new_title is not provided, a new title will be generated
-#    /timeout \\[new_timeout]   - Modify the api timeout
-#    /undo                    - Undo the last question and remove its answer
-#    /delete (first)          - Delete the first conversation in current chat
-#    /delete all              - Clear all messages and conversations current chat
-#    /version                 - Show gpt-term local and remote version
-#    /lang                    - Switch language
-#    /help                    - Show this help message
-#    /exit                    - Exit the application"
+  help_text: |
+    [bold]Available commands:[/]
+      /raw                     - Toggle raw mode (showing raw text of ChatGPT's reply)
+      /multi                   - Toggle multi-line mode (allow multi-line input)
+      /stream \[overflow_mode]  - Toggle stream output mode (flow print the answer)
+      /tokens                  - Show the total tokens spent and the tokens for the current conversation
+      /usage                   - Show total credits and current credits used
+      /last                    - Display last ChatGPT's reply
+      /copy (all)              - Copy the full ChatGPT's last reply (raw) to Clipboard
+      /copy code \[index]       - Copy the code in ChatGPT's last reply to Clipboard
+      /save \[filename_or_path] - Save the chat history to a file, suggest title if filename_or_path not provided
+      /model \[model_name]      - Change AI model
+      /system \[new_prompt]     - Modify the system prompt
+      /rand \[randomness]       - Set Model sampling temperature (0~2)
+      /title \[new_title]       - Set title for this chat, if new_title is not provided, a new title will be generated
+      /timeout \[new_timeout]   - Modify the api timeout
+      /undo                    - Undo the last question and remove its answer
+      /delete (first)          - Delete the first conversation in current chat
+      /delete all              - Clear all messages and conversations current chat
+      /version                 - Show gpt-term local and remote version
+      /lang \[new_language]     - Switch language
+      /help                    - Show this help message
+      /exit                    - Exit the application"

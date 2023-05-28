@@ -40,15 +40,9 @@ from . import __version__
 from .locale import set_lang,test_lang
 import locale
 
-language, encoding = locale.getdefaultlocale()
-_ = set_lang(language)
-#_ = test_lang("zh_cn")
-
-
 from .Ai.AiClass import ChatMode
 from .Ai.OpenAi import openai
 from .Ai.Poe import poe_mode
-
 
 data_dir = Path.home() / '.gpt-term'
 data_dir.mkdir(parents=True, exist_ok=True)
@@ -83,7 +77,6 @@ class ChatMode:
     @classmethod
     def toggle_raw_mode(cls):
         cls.raw_mode = not cls.raw_mode
-        a=123
         if cls.raw_mode:
             console.print(_("gpt_term.raw_mode_enabled"))
         else:
@@ -112,7 +105,8 @@ class ChatMode:
 class ChatGPT:
     def __init__(self, api_key: str, timeout: float):
         self.api_key = api_key
-        self.endpoint = "https://api.openai.com/v1/chat/completions"
+        self.host = "https://api.openai.com"
+        self.endpoint = self.host + "/v1/chat/completions"
         self.headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {api_key}"
@@ -417,7 +411,7 @@ class ChatGPT:
             return None
 
     def fetch_credit_total_granted(self):
-        url_subscription = "https://api.openai.com/dashboard/billing/subscription"
+        url_subscription = self.host + "/dashboard/billing/subscription"
         response_subscription = self.send_get(url_subscription)
         if not response_subscription:
             self.credit_total_granted = None
@@ -437,7 +431,7 @@ class ChatGPT:
             "total_usage"] / 100
 
     def get_credit_usage(self):
-        url_usage = "https://api.openai.com/dashboard/billing/usage"
+        url_usage = self.host + "/dashboard/billing/usage"
         try:
             # get response from /dashborad/billing/subscription for total granted credit
             fetch_credit_total_granted_thread = threading.Thread(
@@ -487,14 +481,18 @@ class ChatGPT:
             self.save_chat_history_urgent()
             raise EOFError
         return True
+    
+    def set_host(self, host: str):
+        self.host = host
+        self.endpoint = self.host + "/v1/chat/completions"
 
     def modify_system_prompt(self, new_content: str):
         if self.messages[0]['role'] == 'system':
             old_content = self.messages[0]['content']
             self.messages[0]['content'] = new_content
             console.print(
-                _("gpt_term.system_prompt_moodified",old_content=old_content,new_content=new_content))
-            self.current_tokens = self.count_token(self.messages)
+                _("gpt_term.system_prompt_modified",old_content=old_content,new_content=new_content))
+            self.current_tokens = count_token(self.messages)
             # recount current tokens
             if len(self.messages) > 1:
                 console.print(
@@ -560,8 +558,6 @@ class ChatGPT:
             return
         self.temperature = new_temperature
         console.print(_("gpt_term.temperature_set",temperature=temperature))
-
-
 
 
 class CommandCompleter(Completer):
@@ -758,9 +754,9 @@ def handle_command(command: str, chat_gpt: openai or poe_mode, key_bindings: Key
         with console.status(_("gpt_term.usage_getting")):
             if not chat_gpt.get_credit_usage():
                 return
-        console.print(Panel(_("gpt_term.usage_granted",credit_total_granted=format(chat_gpt.credit_total_granted,".2f"))+"\n"+
-                            _("gpt_term.usage_used_month",credit_used_this_month=format(chat_gpt.credit_used_this_month,'.2f'))+"\n"+
-                            _("gpt_term.usage_total",credit_total_used=format(chat_gpt.credit_total_used,'.2f')),
+        console.print(Panel(f'{_("gpt_term.usage_granted",credit_total_granted=format(chat_gpt.credit_total_granted, ".2f"))}\n'
+                            f'{_("gpt_term.usage_used_month",credit_used_this_month=format(chat_gpt.credit_used_this_month, ".2f"))}\n'
+                            f'{_("gpt_term.usage_total",credit_total_used=format(chat_gpt.credit_total_used, ".2f"))}',
                             title=_("gpt_term.usage_title"), title_align='left', subtitle=_("gpt_term.usage_plan",credit_plan=chat_gpt.credit_plan), width=35))
 
     elif command.startswith('/model'):
@@ -873,8 +869,7 @@ def handle_command(command: str, chat_gpt: openai or poe_mode, key_bindings: Key
                 truncated_question += "..."
             console.print(
                 _("gpt_term.undo_removed",truncated_question=truncated_question))
-            chat_gpt.current_tokens = chat_gpt.count_token(chat_gpt.messages)
-
+            chat_gpt.current_tokens = count_token(chat_gpt.messages)
         else:
             console.print(_("gpt_term.undo_nothing"))
 
@@ -903,16 +898,19 @@ def handle_command(command: str, chat_gpt: openai or poe_mode, key_bindings: Key
     
     elif command.startswith('/lang'):
         args = command.split()
-        if len(args) == 1:
-            console.print(_("gpt_term.lang_no_arg"))
-        elif args[1]:
-            #   把最后2位修改为大写,例:"zh_cn" -> "zh_CN".主要是因为不知道为什么split后,原本的大写转为小写了,这个算是个临时解决方案
-            if len(args[1]) > 2:
-                args[1] = args[1][:-2] + args[1][-2:].upper()
-            print(args[1])
-            breakpoint()
-            _=set_lang(args[1])
-            console.print(_("gpt_term.lang_switch"))
+        if len(args) > 1:
+            new_lang = args[1]
+        else:
+            new_lang = prompt(
+                _("gpt_term.new_lang_prompt"), default=get_lang(), style=style)
+        if new_lang != get_lang():
+            if new_lang in supported_langs:
+                _=set_lang(new_lang)
+                console.print(_("gpt_term.lang_switch"))
+            else:
+                console.print(_("gpt_term.lang_unsupport", new_lang=new_lang))
+        else:
+            console.print(_("gpt_term.No_change"))
 
     elif command == '/exit':
         raise EOFError
@@ -934,7 +932,7 @@ def handle_command(command: str, chat_gpt: openai or poe_mode, key_bindings: Key
         
         console.print(_("gpt_term.help_uncommand",command=command), end=" ")
         if most_similar_command:
-            console.print(_("gpt_term.help_mean_help",most_similar_command=most_similar_command))
+            console.print(_("gpt_term.help_mean_command",most_similar_command=most_similar_command))
         else:
             console.print("")
         console.print(_("gpt_term.help_use_help"))
@@ -1001,13 +999,17 @@ def write_config(config_ini: ConfigParser):
 def set_config_by_args(args: argparse.Namespace, config_ini: ConfigParser):
     global _
     config_need_to_set = {}
+    if args.set_host:       config_need_to_set.update({"OPENAI_HOST"         : args.set_host})
     if args.set_apikey:     config_need_to_set.update({"OPENAI_API_KEY"      : args.set_apikey})
     if args.set_timeout:    config_need_to_set.update({"OPENAI_API_TIMEOUT"  : args.set_timeout})
     if args.set_saveperfix: config_need_to_set.update({"CHAT_SAVE_PERFIX"    : args.set_saveperfix})
     if args.set_loglevel:   config_need_to_set.update({"LOG_LEVEL"           : args.set_loglevel})
     if args.set_gentitle:   config_need_to_set.update({"AUTO_GENERATE_TITLE" : args.set_gentitle})
     # 新的语言设置:
-    if args.set_lang:       config_need_to_set.update({"LANGUAGE"            : args.set_lang})
+    if args.set_lang:       
+        config_need_to_set.update({"LANGUAGE": args.set_lang})
+        _=set_lang(args.set_lang)
+    # here: when set lang is called, set language before printing 'set-successful' messages
 
     if len(config_need_to_set) == 0:
         return
@@ -1021,7 +1023,12 @@ def set_config_by_args(args: argparse.Namespace, config_ini: ConfigParser):
 
 
 def main():
-    global _
+    global _, supported_langs
+    supported_langs = ["en","zh_CN","jp","de"]
+    local_lang = locale.getdefaultlocale()[0]
+    if local_lang not in supported_langs:
+        local_lang = "en"
+    _=set_lang(local_lang)
 
     # 读取配置文件
     config_ini = ConfigParser()
@@ -1029,28 +1036,28 @@ def main():
     config = config_ini['DEFAULT']
 
     # 读取语言配置
-    if config.get("language"):
-        if config.get("language") == "zh_CN":
-            _=set_lang("zh_CN")
-        elif config.get("language") == "en":
-            _=set_lang("en")
-        elif config.get("language") == "jp":
-            _=set_lang("jp")
-        elif config.get("language") == "de":
-            _=set_lang("de")
+    config_lang = config.get("language")
+    if config_lang:
+        if config_lang in supported_langs:
+            _=set_lang(config_lang)
+        else:
+            console.print(_("gpt_term.lang_config_unsupport", config_lang=config_lang))
+        # if lang set in config is not support, print infos and use default local_lang
 
     parser = argparse.ArgumentParser(description=_("gpt_term.help_description"),add_help=False)
     parser.add_argument('-h', '--help',action='help', help=_("gpt_term.help_help"))
-    parser.add_argument('-v','--version', action='version', version=_("gpt_term.v",local_version=local_version),help=_("gpt_term.help_v"))
+    parser.add_argument('-v','--version', action='version', version=f'%(prog)s v{local_version}',help=_("gpt_term.help_v"))
     parser.add_argument('--load', metavar='FILE', type=str, help=_("gpt_term.help_load"))
     parser.add_argument('--key', type=str, help=_("gpt_term.help_key"))
     parser.add_argument('--model', type=str, help=_("gpt_term.help_model"))
+    parser.add_argument('--host', metavar='HOST', type=str, help=_("gpt_term.help_host"))
     parser.add_argument('-m', '--multi', action='store_true', help=_("gpt_term.help_m"))
     parser.add_argument('-r', '--raw', action='store_true', help=_("gpt_term.help_r"))
     ## 新添加的选项：--lang
     parser.add_argument('-l','--lang', type=str, choices=['en', 'zh_CN', 'jp', 'de'], help=_("gpt_term.help_lang"))
     # normal function args
 
+    parser.add_argument('--set-host', metavar='HOST', type=str, help=_("gpt_term.help_set_host"))
     parser.add_argument('--set-apikey', metavar='KEY', type=str, help=_("gpt_term.help_set_key"))
     parser.add_argument('--set-timeout', metavar='SEC', type=int, help=_("gpt_term.help_set_timeout"))
     parser.add_argument('--set-gentitle', metavar='BOOL', type=str, help=_("gpt_term.help_set_gentitle"))
@@ -1061,17 +1068,11 @@ def main():
     # setting args
     args = parser.parse_args()
 
-    
-    if args.set_lang:
-        if args.set_lang == "zh_CN":
-            _=set_lang("zh_CN")
-        elif args.set_lang == "en":
-            _=set_lang("en")
-        elif args.set_lang == "jp":
-            _=set_lang("jp")
-        elif args.set_lang == "de":
-            _=set_lang("de")
     set_config_by_args(args, config_ini)
+
+    if args.lang:
+        _=set_lang(args.lang)
+        console.print(_("gpt_term.lang_switch"))
 
     try:
         log_level = getattr(logging, config.get("LOG_LEVEL", "INFO").upper())
@@ -1113,10 +1114,10 @@ def main():
 
     chat_save_perfix = config.get("CHAT_SAVE_PERFIX", "./chat_history_")
 
-    openai_api_key="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"
-    poe_api_key="tKSUqU_FYfgznLgFkudAmw%3D%3D"
-    #chat_gpt = poe_mode(api_key=poe_api_key,console=console,timeout=api_timeout,log=log,data_dir=data_dir,_=_,Use_tiktoken=1)
-    chat_gpt = openai(api_key=openai_api_key,console=console,timeout=api_timeout,log=log,data_dir=data_dir,_=_,Use_tiktoken=1)
+    chat_gpt = ChatGPT(api_key, api_timeout)
+    
+    if config.get("OPENAI_HOST"):
+        chat_gpt.set_host(config.get("OPENAI_HOST"))
 
     if not config.getboolean("AUTO_GENERATE_TITLE", True):
         chat_gpt.auto_gen_title_background_enable = False
@@ -1127,8 +1128,10 @@ def main():
     gen_title_daemon_thread.start()
     log.debug("Title generation daemon thread started")
 
-    if not args.lang:
-        args.lang = config.get("LANGUAGE")
+    if args.host:
+        chat_gpt.set_host(args.host)
+        console.print(_("gpt_term.host_set", new_host=args.host))
+
     if args.model:
         chat_gpt.set_model(args.model)
 
@@ -1149,15 +1152,6 @@ def main():
             log.info(f"Chat history successfully loaded from: {args.load}")
             console.print(
                 _("gpt_term.load_chat_history",load=args.load), highlight=False)
-    if args.lang:
-        if args.lang == "zh_CN":
-            _=set_lang("zh_CN")
-        elif args.lang == "en":
-            _=set_lang("en")
-        elif args.lang == "jp":
-            _=set_lang("jp")
-        elif args.lang == "de":
-            _=set_lang("de")
 
     console.print(
         _("gpt_term.welcome"))
@@ -1173,7 +1167,7 @@ def main():
                 '> ', completer=command_completer, complete_while_typing=True, key_bindings=key_bindings)
 
             if message.startswith('/'):
-                command = message.strip().lower()
+                command = message.strip()
                 handle_command(command, chat_gpt,
                                key_bindings, chat_save_perfix)
             else:

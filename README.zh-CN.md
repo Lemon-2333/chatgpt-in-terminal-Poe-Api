@@ -21,7 +21,24 @@
 
 默认使用 [gpt-3.5-turbo](https://platform.openai.com/docs/guides/chat/chat-completions-beta) 模型，也就是 ChatGPT(免费版) 所使用的模型。
 
+### 相关项目
+
+[C/C++实现的GPTerm](https://github.com/Ace-Radom/cGPTerm) by @Ace-Radom
+
+[可以调用 POE API 的 gpt-term](https://github.com/Lemon-2333/chatgpt-in-terminal-Poe-Api) by @Lemon-2333
+
 ## 更新记录
+
+### 2023-05-20
+
+- 新增 host 配置项支持，在使用自建 API 反向代理服务器的时候很有用([#49](https://github.com/xiaoxx970/chatgpt-in-terminal/issues/49))，你现在可以使用 `gpt-term --set-host HOST` 来配置 host，默认为 https://api.openai.com。
+
+### 2023-05-18
+
+- 新增多语言支持：英语、中文、日语、德语，默认跟随系统语言，现在可以使用 `/lang` 来切换语言
+
+<details>
+  <summary>更多 Change log</summary>
 
 ### 2023-05-11
 
@@ -32,9 +49,6 @@
 - 添加`/rand`命令设置temperature参数
 
 - 为 `/stream` 命令添加 overflow 模式切换，现在可以运行命令 `/stream visible` 切换到始终可见模式。在这个模式下，超出屏幕的内容将被向上滚动，新内容会一直输出直到完成
-
-<details>
-  <summary>更多 Change log</summary>
 
 ### 2023-04-23
 
@@ -89,6 +103,8 @@
 
 2. [Python](https://www.python.org/downloads/) 3.7 或更高版本
 
+   **注意：尽量不要使用系统自带的 Python（包括Windows11 的应用商店版 Python 和 MacOS 的预装 Python），否则会出现安装好后gpt-term 命令找不到的情况 ([#38](https://github.com/xiaoxx970/chatgpt-in-terminal/issues/38))**
+
 ## 安装
 
 1. 使用 `pip` 安装 `GPT-Term`
@@ -124,6 +140,12 @@ pip3 install --upgrade gpt-term
 gpt-term
 ```
 
+或者：
+
+```shell
+python3 -m gpt_term
+```
+
 在默认的单行模式下输入提问时，使用 `Esc` + `Enter` 换行，`Enter` 提交
 
 以下是一些常见的快捷键（同时也是shell的快捷键）：
@@ -146,13 +168,17 @@ gpt-term
 | --load FILE   | 从文件中加载聊天记录              | `gpt-term --load chat_history_code_check.json` |
 | --key API_KEY | 选择 config.ini 文件中要使用的 API 密钥 | `gpt-term --key OPENAI_API_KEY1`              |
 | --model MODEL | 选择要使用的 AI 模型              | `gpt-term --model gpt-3.5-turbo`              |
+| --host HOST | 设置在本次运行中使用的 API Host 地址（这通常被用来配置代理） | `gpt-term --host https://closeai.deno.dev`              |
 | -m, --multi   | 启用多行模式                      | `gpt-term --multi`                            |
 | -r, --raw     | 启用原始模式                      | `gpt-term --raw`                              |
+| -l, --lang LANG | 设置本次运行语言：en, zh_CN, jp, de | `gpt-term --lang en` |
+| --set-host HOST        | 设置API Host地址（这通常被用来配置代理）              | `gpt-term --set-host https://closeai.deno.dev` |
 | --set-apikey KEY        | 设置 OpenAI 的 API 密钥                          | `gpt-term --set-apikey sk-xxx` |
-| --set-timeout SEC       | 设置 API 请求的最大等待时间                         | `gpt-term --set-timeout 10` |
+| --set-timeout SEC       | 设置 API 请求的最大等待时间                        | `gpt-term --set-timeout 10` |
 | --set-gentitle BOOL     | 设置是否为聊天自动生成标题                          | `gpt-term --set-gentitle True` |
 | --set-saveperfix PERFIX | 设置聊天历史文件的保存前缀                          | `gpt-term --set-saveperfix chat_history_` |
 | --set-loglevel LEVEL    | 设置日志级别：DEBUG, INFO, WARNING, ERROR, CRITICAL | `gpt-term --set-loglevel DEBUG` |
+| --set-lang LANG    | 设置语言：en, zh_CN, jp, de | `gpt-term --set-lang en` |
 
 > 多行模式与 raw 模式可以同时使用
 
@@ -179,6 +205,9 @@ CHAT_SAVE_PERFIX=./chat_history_
 
 # 日志级别，默认为INFO，可选值：DEBUG、INFO、WARNING、ERROR、CRITICAL
 LOG_LEVEL=INFO
+
+# 设置程序的语言，默认为空，将跟随系统语言
+LANGUAGE=
 ```
 
 ### 可用命令

@@ -19,7 +19,24 @@ Supports saving chat messages to a JSON file and loading them from the file.
 
 Uses the [gpt-3.5-turbo](https://platform.openai.com/docs/guides/chat/chat-completions-beta) model, which is the same model used by ChatGPT (Free Edition), as default.
 
+### Related Projects
+
+[GPTerm implemented in C/C++](https://github.com/Ace-Radom/cGPTerm) by @Ace-Radom
+
+[gpt-term that can call POE API](https://github.com/Lemon-2333/chatgpt-in-terminal-Poe-Api) by @Lemon-2333
+
 ## Changelog
+
+### 2023-05-20
+
+- Added host configuration support, which is very useful when using self-built API reverse proxy server ([#49](https://github.com/xiaoxx970/chatgpt-in-terminal/issues/49)), you can now use `gpt-term --set-host HOST` to configure host, the default is https://api.openai.com
+
+### 2023-05-18
+
+- Added multi-language support: English, Chinese, Japanese, German, follow the system language by default, now you can use `/lang` to switch languages
+
+<details>
+  <summary>More Change log</summary>
 
 ### 2023-05-11
 
@@ -30,9 +47,6 @@ Uses the [gpt-3.5-turbo](https://platform.openai.com/docs/guides/chat/chat-compl
 - Add `/rand` command to set temperature parameter
 
 - Add overflow mode switch for `/stream` command, now you can run command `/stream visible` to switch to always visible mode. In this mode, the content that exceeds the screen will be scrolled up, and the new content will be output until it is completed
-
-<details>
-  <summary>More Change log</summary>
 
 ### 2023-04-23
 Released `gpt-term` on [Pypi](https://pypi.org/project/gpt-term/), started version control. No need to clone the project locally anymore, simply use the `pip` command to install gpt-term.
@@ -86,6 +100,8 @@ Released `gpt-term` on [Pypi](https://pypi.org/project/gpt-term/), started versi
 
 2. [Python](https://www.python.org/downloads/) version 3.7 or higher.
 
+   **Attention: Try not to use the Python that comes with the system (including Windows 11 app store version and MacOS pre-installed Python), otherwise the gpt-term command will not be found after installation ([#38](https://github.com/xiaoxx970/chatgpt-in-terminal/issues/38))**
+
 ## Installation
 
 
@@ -121,6 +137,12 @@ Run with the following command:
 gpt-term
 ```
 
+Or:
+
+```shell
+python3 -m gpt_term
+```
+
 When entering a question in single-line mode, use `Esc` + `Enter` to start a new line, and use `Enter` to submit the question.
 
 Here are some common shortcut keys (also shortcut keys for the shell):
@@ -137,19 +159,23 @@ Here are some common shortcut keys (also shortcut keys for the shell):
 
 ### Available Arguments
 
-| Arguments     | Description                     | Example                                       |
-| ------------- | ------------------------------- | --------------------------------------------- |
-| -h, --help    | show this help message and exit | `gpt-term --help`                             |
-| --load FILE   | Load chat history from file     | `gpt-term --load chat_history_code_check.json` |
-| --key API_KEY | choose the API key to load      | `gpt-term --key OPENAI_API_KEY1`              |
-| --model MODEL | choose the AI model to use      | `gpt-term --model gpt-3.5-turbo`              |
-| -m, --multi   | Enable multi-line mode          | `gpt-term --multi`                            |
-| -r, --raw     | Enable raw mode                 | `gpt-term --raw`                              |
-| --set-apikey KEY        | Set the OpenAI API key                                   | `gpt-term --set-apikey sk-xxx`   |
-| --set-timeout SEC       | Set the maximum wait time for API requests               | `gpt-term --set-timeout 10`      |
-| --set-gentitle BOOL     | Set whether to auto-generate a title for the chat        | `gpt-term --set-gentitle True`   |
-| --set-saveperfix PERFIX | Set the save prefix for chat history files               | `gpt-term --set-saveperfix chat_history_` |
-| --set-loglevel LEVEL    | Set the log level: DEBUG, INFO, WARNING, ERROR, CRITICAL | `gpt-term --set-loglevel DEBUG`  |
+| Arguments | Description | Examples |
+| ------------- | --------------------------------- | ------------------------------------------------ |
+| -h, --help | show this help message and exit | `gpt-term --help` |
+| --load FILE | Load chat history from file | `gpt-term --load chat_history_code_check.json` |
+| --key API_KEY | Select the API key to use in the config.ini file | `gpt-term --key OPENAI_API_KEY1` |
+| --model MODEL | Select AI model to use | `gpt-term --model gpt-3.5-turbo` |
+| --host HOST | Set the API Host address used in this run (this is usually used to configure proxy) | `gpt-term --host https://closeai.deno.dev` |
+| -m, --multi | Enable multiline mode | `gpt-term --multi` |
+| -r, --raw | Enable raw mode | `gpt-term --raw` |
+| -l, --lang LANG | Set the current running language: en, zh_CN, jp, de | `gpt-term --lang en` |
+| --set-host HOST | Set API Host address (this is usually used to configure proxy) | `gpt-term --set-host https://closeai.deno.dev` |
+| --set-apikey KEY | Set OpenAI API key | `gpt-term --set-apikey sk-xxx` |
+| --set-timeout SEC | Set the maximum wait time for API requests | `gpt-term --set-timeout 10` |
+| --set-gentitle BOOL | Set whether to auto-generate title for chat | `gpt-term --set-gentitle True` |
+| --set-saveperfix PERFIX | Set the save prefix for chat history files | `gpt-term --set-saveperfix chat_history_` |
+| --set-loglevel LEVEL | Set log level: DEBUG, INFO, WARNING, ERROR, CRITICAL | `gpt-term --set-loglevel DEBUG` |
+| --set-lang LANG | Set language: en, zh_CN, jp, de | `gpt-term --set-lang en` |
 
 > Multi-line mode and raw mode can be used simultaneously
 
@@ -176,6 +202,9 @@ CHAT_SAVE_PERFIX=./chat_history_
 
 # Log level, default is INFO, available value: DEBUG, INFO, WARNING, ERROR, CRITICAL
 LOG_LEVEL=INFO
+
+# Set the language of the program, the default is empty, it will follow the system language
+LANGUAGE=
 ```
 
 ### Available Commands
